@@ -2,6 +2,7 @@
 
 import shutil
 import sqlite3
+import uuid
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -105,3 +106,41 @@ class ImageStorage:
 
     def close(self) -> None:
         """兼容上游调用入口；本实现没有需要延后关闭的连接。"""
+
+    @staticmethod
+    def list_existing(db_path: str | Path, collection: str | None = None, doc_hash: str | None = None) -> list[dict]:
+        """只读已有图片登记，不创建目录或 SQLite 表。"""
+        path = resolve_path(db_path)
+        if not path.is_file():
+            return []
+        query, values = "SELECT * FROM image_index WHERE 1=1", []
+        for key, value in (("collection", collection), ("doc_hash", doc_hash)):
+            if value is not None:
+                query += f" AND {key} = ?"
+                values.append(value)
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as connection:
+            connection.row_factory = sqlite3.Row
+            return [dict(row) for row in connection.execute(query + " ORDER BY created_at, image_id", values)]
+
+    def delete_image(self, image_id: str, *, collection: str) -> bool:
+        """只清理该集合登记，未共享的受管理文件移到 .trash，不碰源图片。"""
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            row = connection.execute("SELECT file_path FROM image_index WHERE image_id = ? AND collection = ?",
+                                     (image_id, collection)).fetchone()
+            if row is None:
+                return False
+            path = Path(row[0]).resolve()
+            root = self.images_root.resolve()
+            if not path.is_relative_to(root):
+                raise ValueError("Registered image is outside managed images root")
+            shared = connection.execute("SELECT COUNT(*) FROM image_index WHERE file_path = ? AND image_id != ?",
+                                        (row[0], image_id)).fetchone()[0]
+            if not shared and path.is_file():
+                trash = root / ".trash"
+                if not trash.resolve().is_relative_to(root):
+                    raise ValueError("Image trash escapes managed root")
+                trash.mkdir(parents=True, exist_ok=True)
+                path.rename(trash / f"{uuid.uuid4().hex}_{path.name}")
+            connection.execute("DELETE FROM image_index WHERE image_id = ? AND collection = ?", (image_id, collection))
+            connection.commit()
+        return True

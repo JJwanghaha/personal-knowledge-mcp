@@ -6,15 +6,18 @@ from typing import TYPE_CHECKING, Any
 
 from src.libs.evaluator.base_evaluator import BaseEvaluator, NoneEvaluator
 from src.libs.evaluator.custom_evaluator import CustomEvaluator
+from src.observability.evaluation.ragas_evaluator import RagasEvaluator
+from src.observability.evaluation.composite_evaluator import CompositeEvaluator
 
 if TYPE_CHECKING:
     from src.core.settings import Settings
 
 
 class EvaluatorFactory:
-    """B6 提供 custom；模型评估框架在 H 阶段接入。"""
+    """规则 custom 与可选 ragas；导入工厂不加载 Ragas 或初始化模型。"""
 
-    _PROVIDERS: dict[str, type[BaseEvaluator]] = {"custom": CustomEvaluator}
+    _PROVIDERS: dict[str, type[BaseEvaluator]] = {"custom": CustomEvaluator, "ragas": RagasEvaluator,
+                                              "composite": CompositeEvaluator}
 
     @classmethod
     def register_provider(cls, name: str, provider_class: type[BaseEvaluator]) -> None:
@@ -40,5 +43,7 @@ class EvaluatorFactory:
             raise ValueError(f"Unsupported Evaluator provider: '{name}'. Available providers: {available}")
         try:
             return provider_class(settings=settings, **override_kwargs)
+        except ImportError:
+            raise
         except Exception as exc:
-            raise RuntimeError(f"Failed to instantiate Evaluator provider '{name}': {exc}") from exc
+            raise RuntimeError(f"Failed to instantiate Evaluator provider '{name}': {type(exc).__name__}") from None

@@ -16,7 +16,7 @@ pytestmark = pytest.mark.unit
 def test_openai_factory_sends_messages_and_returns_unified_response():
     """工厂选出的真实实现发出正确请求并转换响应。"""
     settings = load_settings()
-    settings = replace(settings, llm=replace(settings.llm, provider="openai", model="test-model"))
+    settings = replace(settings, llm=replace(settings.llm, provider="openai", model="test-model", base_url=None))
 
     def server(request):
         assert request.url.path == "/v1/chat/completions"
@@ -42,7 +42,7 @@ def test_openai_factory_sends_messages_and_returns_unified_response():
 def test_other_llm_providers_route_to_their_own_protocol(provider):
     """不同后端保持公开接口，但地址、认证、请求体按协议变化。"""
     settings = load_settings()
-    settings = replace(settings, llm=replace(settings.llm, provider=provider, model="test-model"))
+    settings = replace(settings, llm=replace(settings.llm, provider=provider, model="test-model", base_url=None))
 
     def server(request):
         body = json.loads(request.content)

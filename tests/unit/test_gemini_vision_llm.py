@@ -28,8 +28,9 @@ def picture_bytes(size=(40, 20)):
 
 
 def vision_settings():
-    """测试型号不是账号可用性的声明。"""
-    return replace(load_settings(), vision_llm=VisionLLMSettings(
+    """固定 Gemini 测试配置，不继承用户当前 Gateway 的地址。"""
+    settings = load_settings()
+    return replace(settings, llm=replace(settings.llm, provider="gemini", base_url=None), vision_llm=VisionLLMSettings(
         enabled=False, provider="gemini", model="test-gemini-vision", max_image_size=100,
     ))
 

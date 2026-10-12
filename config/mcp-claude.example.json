@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "personal-knowledge": {
+      "command": "/ABSOLUTE/RAG-REPO/.venv/bin/python",
+      "args": ["/ABSOLUTE/RAG-REPO/main.py", "--config", "/ABSOLUTE/RAG-REPO/config/settings.yaml", "--data-dir", "/ABSOLUTE/RAG-REPO/data"],
+      "env": {"OPENAI_API_KEY": "SET_LOCALLY_DO_NOT_COMMIT"}
+    }
+  }
+}

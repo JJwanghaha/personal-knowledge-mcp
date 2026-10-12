@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 def test_ollama_batches_texts_without_silent_truncation():
     """新版 /api/embed 一次发送多个文本，超长文本不得静默截断。"""
     settings = load_settings()
-    settings = replace(settings, embedding=replace(settings.embedding, provider="ollama", model="test-embed", dimensions=2))
+    settings = replace(settings, embedding=replace(settings.embedding, provider="ollama", model="test-embed", dimensions=2, base_url=None))
 
     def server(request):
         assert request.url.path == "/api/embed"

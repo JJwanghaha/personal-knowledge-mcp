@@ -50,6 +50,8 @@ class CustomEvaluator(BaseEvaluator):
                         break
                 else:
                     raise ValueError(f"Missing id field at index {index}")
+            elif hasattr(item, "chunk_id"):
+                identifiers.append(str(item.chunk_id))
             elif hasattr(item, "id"):
                 identifiers.append(str(item.id))
             else:

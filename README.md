@@ -1,629 +1,201 @@
-# Modular RAG MCP Server
+# 个人知识库 RAG MCP Server
 
-> 一个可插拔、可观测的模块化 RAG（检索增强生成）服务框架，通过 MCP（Model Context Protocol）协议对外暴露工具接口，支持 Copilot / Claude 等 AI 助手直接调用。同时也是一份专为**大模型相关岗位学习与面试求职**设计的实战项目与配套教学资源。
+参考 [jerry-ai-dev/MODULAR-RAG-MCP-SERVER](https://github.com/jerry-ai-dev/MODULAR-RAG-MCP-SERVER)，从零学习并实现的模块化知识库。当前分支：`learning/from-zero`。
 
----
+支持 PDF/Markdown 摄取、Dense＋BM25＋RRF 检索、可选重排、MCP 三工具、中文管理后台、Trace、固定测试集评估与质量门槛。查询工具返回证据，不生成最终答案；评估中的答案生成是独立显式操作。
 
-## 📖 目录
+2026-10-12：A–I 第一版已实现。当前为金山云 Gateway 的 `deepseek-v4.1-flash`＋`qwen3-embedding-8b`（4096 维）；五份公开/合成样例走通真实摄取、CLI/MCP、三题证据回答/规则评估与六页后台，无检索降级。配置切换后全量 821 项通过（0 跳过、退出码 0），保留 5 条既有警告。个人知识库质量、实际 Agent 宿主与公开主页未验收，当前不是生产级权限或多租户系统。
 
-- [项目概述](#-项目概述)
-- [从零学习入口](#-从零学习入口)
-- [分支说明](#-分支说明)
-- [快速开始](#-快速开始)
-- [谁适合用这个项目 & 怎么用](#-谁适合用这个项目--怎么用)
-- [简历参考](#-简历参考)
-- [常见问题](#-常见问题)
-- [后续安排](#-后续安排)
+[架构导读](docs/架构导读.md) · [上游开发规格](DEV_SPEC.md)
 
----
+## 1. 安装与无 Key 快速开始
 
-## 🧭 从零学习入口
-
-- [架构导读](docs/架构导读.md)：用架构图和通俗解释认识 Module、Interface、Seam、Adapter、Libs、Ingestion 与 Query。
-- [完整开发规格](DEV_SPEC.md)：查看上游完整架构、技术设计、测试方案和 A–I 开发任务。
-
-当前 `learning/from-zero` 分支已实现并验证阶段 A、B1–B9、C1–C15、D1–D7、E1–E6 和 F1–F5：个人 Gemini 扩展、PDF/Markdown 摄取、Dense/BM25 混合检索、RRF 融合、重排回退、MCP 三工具和双链路 Trace。临时语料完整离线链路已通过，Embedding 使用离线替身。真实知识库入库、实际 Agent 宿主接入、视觉描述和重排效果尚未验收。Gemini 编码此前真实调用成功，生成型号标识差异仍待核实。Dashboard、完整评估和最终验收留 G/H/I 阶段；下文完整产品介绍属于上游参考，不代表此学习分支已具备所有功能。
-
-当前验收命令（在项目根目录执行）：
+以下从源码工作区运行，当前验收使用 Python 3.12。Windows 将 `.venv/bin/python` 换为 `.venv/Scripts/python.exe`。
 
 ```bash
-uv pip install --python .venv/bin/python -e '.[dev,providers,splitters,vector-stores,sparse,vision,loaders,mcp]'
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -e '.[dev,providers,splitters,vector-stores,sparse,vision,loaders,mcp,dashboard,evaluation]'
 .venv/bin/python main.py --check
+.venv/bin/python scripts/evaluate.py --check
+.venv/bin/python scripts/offline_demo.py
+```
+
+已有虚拟环境时无需重新创建。依赖包括 Streamlit>=1.50、Ragas==0.4.3、langchain-community==0.4.1；固定后两者避免新版删除旧接口导致 Ragas 无法导入。
+
+`offline_demo.py` 不需要 Key，拒绝 Python socket 出站连接，只用公开样例和词项哈希向量替身；这是程序内防线，不是操作系统断网沙箱：
+
+- 在新的 `data/acceptance/随机ID` 目录摄取 MD、PDF 和本地图片，再检查重复跳过。
+- 从 CLI 与官方 MCP stdio 子进程检索，检查三工具、引用、摘要、图片和错误后连接恢复。
+- 在同一语料上执行 TopK=1 固定题集评估，检查命中率/MRR、覆盖与门槛。
+- 用 AppTest 渲染后台六页，核对摄取/查询 Trace 已完成。
+- 保留 `acceptance.json`、隔离配置、数据、Trace、评估报告和 MCP stderr。旧目录不会覆盖，不自动删除任何工作资料。
+
+这证明工程流程可复现，不证明真实模型的语义质量。离线配置仅供该演示入口及浏览结果，不能当生产模型配置。I 阶段完整记录在独立学习文档仓库。
+
+离线测试用于回归，不能代替真实验收。此前 Gemini 生成的 503/504 保留为历史失败记录；用户随后授权双模型都改走公司 Gateway。新样例库全部重新生成 Qwen 向量，没有复用 Gemini 或哈希向量。三题 TopK=1 命中率/MRR 均为 1、覆盖各 3/3，真实生成答案经人工对照证据；这不是个人知识库质量基线。图片仅解析/保存/返回，视觉描述、文本增强、重排和 Ragas 本次未启用。
+
+## 2. 真实模型与资料：先用一份小文档
+
+默认生成是 `deepseek-v4.1-flash`，Embedding 是 `qwen3-embedding-8b`、4096 维，均走 `https://kspmas.ksyun.com/v1`，超时 60 秒。两项 `provider: openai` 表示复用 OpenAI-compatible adapter，不代表请求 OpenAI 服务；不自动重试或切换供应商。地址/型号由 `config/settings.yaml` 指定。
+
+程序不会自动读 `.env`。Key 必须出现在启动进程的环境中；不要写入 YAML、源码或公开日志。macOS/zsh 可由你在自己的终端隐藏输入：
+
+```zsh
+read -rs "OPENAI_API_KEY?输入公司 Gateway Key（不回显）："
+export OPENAI_API_KEY
+```
+
+也可由宿主显式加载已配置的环境文件。当前双模型都读 `OPENAI_API_KEY`；这是公司 Gateway Key，不需要另申请 OpenAI Key。旧 Gemini adapter/Key 可保留，默认不使用。GUI 启动的后台或 Agent 不一定继承终端环境，设置 Key 后需要从正确环境重启对应进程。
+
+```bash
+# 预览候选文件，不读正文、不调用模型、不写入索引。
+.venv/bin/python scripts/ingest.py --path /path/to/selected-note.md --collection manual_check --dry-run
+
+# 以下真实发送文档/问题给 Embedding 服务并写入存储，执行前确认资料可发送及额度。
+.venv/bin/python scripts/ingest.py --path /path/to/selected-note.md --collection manual_check --verbose
+.venv/bin/python scripts/query.py --query "这份文档能回答的问题" --collection manual_check --top-k 5 --no-rerank --verbose
+```
+
+各入口的 `--data-dir` 必须一致；不指定时用仓库默认路径。切换 Embedding 模型或维度后应重新建索引，不能把不同空间混在同一集合。
+
+重建时用全新的数据根目录，而不只是改集合名：历史查重仍按文件哈希，不区分模型/集合，否则旧成功记录可能跳过新编码。当前 Qwen 使用网关实际返回的 4096 维，adapter 不发送自定义 dimensions，也不本地截断；配置维度用于校验输出。
+
+## 3. 配置与数据位置
+
+| 配置 | 职责 |
+|---|---|
+| `llm` / `embedding` | 模型供应商、型号、超时；不保存 Key |
+| `vector_store` | Chroma 持久化目录 |
+| `ingestion` | 切分字符数/目标重叠、批量大小；可选文本增强 |
+| `retrieval` | 两路召回量、融合量、RRF k |
+| `rerank` | 重排开关、后端、最终条数；默认关闭 |
+| `vision_llm` | 可选图片描述；默认关闭 |
+| `observability` | 日志级别、Trace 开关和文件路径 |
+| `evaluation` | 规则/Ragas/组合评分及指标；默认不自动评估 |
+
+| 默认位置 | 保存内容 |
+|---|---|
+| `data/db/chroma` | Chunk 正文、向量、元数据 |
+| `data/db/bm25/{collection}` | 倒排索引，以最终 Chroma ID 回查正文 |
+| `data/db/ingestion_history.db` | 文件哈希与处理状态 |
+| `data/db/image_index.db`、`data/images` | 图片登记与受管理文件 |
+| `logs/traces.jsonl` | 每行一次完整摄取/查询过程，包含私人正文 |
+| `data/uploads` | 后台上传源；覆盖备份在 `.history` |
+| `data/evaluations` | 私人报告与未审核草稿 |
+
+资料、凭据、索引、Trace 和权重不提交 Git。字段过滤不是正文自动脱敏。
+
+## 4. 本地管理后台
+
+```bash
+.venv/bin/python scripts/start_dashboard.py
+# 可选 --port 8502 --config /absolute/settings.yaml --data-dir /absolute/data
+```
+
+先访问 `http://127.0.0.1:8501/`，再从导航进入六页：
+
+1. 总览：配置、集合、实际文档/Chunk/图片计数。
+2. 数据浏览：完整块、metadata、受路径/格式校验的关联图片。
+3. 摄取管理：PDF/MD/Markdown 与同级图片附件、六阶段进度、源路径确认后删除。
+4. 摄取追踪：解析、切分、增强前后、编码统计和存储映射。
+5. 查询追踪：Dense/BM25 候选、融合、重排名次变化。
+6. 评估面板：审核试卷、评分覆盖、逐题结果、门槛、历史与显式候选题生成。
+
+浏览不调用模型；摄取、评估和出题要求明确确认。删除只清理所选来源在集合内的索引版本，不删除源文件；受管理图片移到 `data/images/.trash`，恢复文件后仍需恢复登记。多存储操作不是事务，部分失败保留历史用于重试。
+
+只绑定 127.0.0.1，没有鉴权，不要暴露公网。
+
+离线验收的实际总览：1 个集合、5 份公开/合成文档、5 个 Chunk、2 张图片。这里的哈希向量不代表 Gemini 效果。
+
+![公开样例的本地后台总览](docs/screenshots/offline-overview.jpg)
+
+历史 Gemini 库的总览（当时生成未通过，卡片只表示配置）：
+
+![真实 Gemini 向量库总览](docs/screenshots/gemini-overview.jpg)
+
+当前 Gateway 双模型的实际配置卡片，已完成真实样例调用：
+
+![Gateway 双模型配置](docs/screenshots/gateway-overview.jpg)
+
+## 5. MCP 接入
+
+服务提供：
+
+| 工具 | 返回 |
+|---|---|
+| `query_knowledge_hub` | 检索证据、来源引用、可选图片与 trace_id |
+| `list_collections` | 已有集合；count 是 Chunk 数，不是文章数 |
+| `get_document_summary` | 按 source_ref/doc_hash 回查已有摘要或预览 |
+
+`main.py` 和安装后的 `mcp-server` 是 stdio 入口，stdout 专用于协议，日志在 stderr。启动/列工具不创建模型或空知识库，实际查询才使用配置的 Embedding。当前 SDK 固定 1.x，真实宿主仍需检查协议协商。
+
+配置样例：
+
+- [VS Code 格式](config/mcp-vscode.example.json)：复制到 RAG 工作区的 `.vscode/mcp.json`，支持显式 `envFile`，不要把真实 Key 提交。
+- [便携 mcpServers 格式](config/mcp-portable.example.json)：替换绝对路径；VS Code 新 Agent Host 优先使用工作区 `.mcp.json` 或用户便携配置。
+- [Claude Desktop](config/mcp-claude.example.json)：通过开发者配置合并，不要覆盖现有其他服务器；Key 只在本机配置。GUI 不保证继承终端环境。
+
+这些是连接模板，不代表本机宿主已接通。VS Code 格式与便携格式的区别见 [官方说明](https://code.visualstudio.com/docs/agent-customization/mcp-servers)，stdio/`envFile` 见 [配置参考](https://code.visualstudio.com/docs/agents/reference/mcp-configuration)；Claude Desktop 配置入口见 [MCP 官方本地服务指南](https://modelcontextprotocol.io/docs/develop/connect-local-servers)。交互式 `${input:...}` 不会转发到新 Agent Host，不假设所有宿主使用同一种密钥加载方式。
+
+本轮未修改任何实际宿主配置。接入后需真实检查工具发现、选定集合、引用与 Trace，再确认验收。
+
+## 6. 固定题集与评估
+
+```bash
+.venv/bin/python scripts/evaluate.py --check
+# 实际执行仍调用检索 Embedding；Ragas 和生成答案额外调用 LLM。
+.venv/bin/python scripts/evaluate.py --collection manual_check --test-set /path/to/reviewed.json --backend custom --top-k 5 --json
+# 可选 --output /new/report.json --min-hit-rate 0.8 --min-mrr 0.5
+```
+
+- custom：规则计算命中值、倒数排名。缺标签跳过，正常空召回有标签才计零。
+- ragas：忠实度、回答相关性、无参考版本上下文精度；必须有真实待评答案。
+- composite：分项合并，失败明确记录，缺指标不填 0，不平均成总分。
+
+题目支持 `expected_chunk_ids` 和 `expected_sources`；ID 优先，只有来源标签时明确是文档级命中。报告保留试卷 SHA256、语料指纹、参数、逐题证据/答案、错误/跳过和评分覆盖数。门槛要求有指标、全题覆盖、无执行错误和均值达标，检索阈值必须大于零。
+
+`reference_answer` 不作为实际回答。可提供 `generated_answer`，或显式使用 `--generate-answers`；生成提示词不包含参考答案。
+
+`scripts/generate_testset.py --collection ... --source /exact/indexed/source --count 10 --output /new/draft.json --confirm-model-call` 只生成 `reviewed=false` 草稿，逐字核验证据后关联实际 Chunk ID。必须人工审核问题和答案、设置 `reviewed=true` 后固定评分，不自动出题后自评。当前候选题以单来源、单片段为基线。
+
+## 7. 测试与验收边界
+
+```bash
 .venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q tests/e2e
+uv pip check --python .venv/bin/python
 ```
 
-`main.py` 启动 MCP stdio 服务并等待客户端消息。日常检查用 `--check`，实际客户端使用 `main.py` 或安装后的 `mcp-server`；E3–E6 本地接入后，默认登记 query_knowledge_hub、list_collections、get_document_summary 三个工具，检索结果含结构化引用和可选关联图片。stdout 专用于协议，日志/检查结果写 stderr；启动或列工具不创建模型/数据库，实际检索才调用配置的 Embedding。`--data-dir` 可与摄取/查询 CLI 共用隔离数据根目录。完整业务测试结果以学习仓库工程记录最新阶段为准；未代表真实模型/语料质量已验收。
+测试用临时资料、真实 parser/Splitter/jieba/Chroma/BM25/SQLite/官方 MCP 客户端/Ragas 算法；只在外部模型 seam 用离线替身，不下载权重。PyMuPDF 的 5 条 SWIG 弃用警告保留。
 
-2026-10-10 最新全量验证：705 个测试通过（13.01 秒），覆盖 D 混合检索/CLI、E 真实 MCP stdio 与离线业务闭环、F Trace/JSONL/双链路打点及进度回调。真实本地 parser、Splitter、jieba、临时 Chroma/BM25/SQLite 和官方 MCP ClientSession 参与链路，不替换内部算法。保留 5 条既有 PDF/SWIG 弃用警告；模型测试不调用真实模型、不要求真实 Key。默认 custom 评估器支持 hit_rate、mrr，生成质量指标仍待 H 阶段。
-
-### D/E/F：混合检索、MCP 与 Trace
+默认测试不依赖某次本机演示的随机目录；两条已保存产物审计会跳过。要完整复现该部分，先在全新目录执行演示，再显式选择它：
 
 ```bash
-# 查询会调用配置的 Embedding；执行前确认已经摄取目标资料及模型额度。
-.venv/bin/python scripts/query.py --query "如何使用知识库？" --collection personal --top-k 5 --verbose
-
-# 只检查三个 MCP 工具的注册，不读取知识库或调用模型。
-.venv/bin/python main.py --check
+.venv/bin/python scripts/offline_demo.py --output-dir /absolute/new-acceptance-directory
+RAG_OFFLINE_ACCEPTANCE_ROOT=/absolute/new-acceptance-directory .venv/bin/python -m pytest -q
 ```
 
-查询流程为问题关键词/过滤条件 → Dense＋BM25 → 已召回候选过滤 → RRF 或单路回退 → 可选重排。`--no-rerank` 强制关闭评分模型，`--data-dir` 与摄取使用同一隔离数据根目录。CLI 退出码 0 表示正常（允许空结果），1 表示查询运行失败，2 表示参数/配置/初始化失败。当前返回检索证据，不生成最终回答。
+选定的目录不存在或证据不完整时必须失败，不算跳过或通过。检查测试断言之外，还要检查进程退出码为 0。
 
-MCP 三工具分别用于检索证据、列出集合、回查文档摘要；返回结构化来源引用和受管理图片。通过集合筛选不等于已实现多用户权限。官方 MCP Python SDK 使用 1.x 协议实现，暂不包含 HTTP 远程部署或实际 Agent 宿主配置验收。
+项目 `src` 入口在加载 Chroma/ONNX Runtime 前设置 `ORT_DISABLE_TELEMETRY=1`，关闭它的原生遥测；这也避免了本轮 macOS 后台遥测线程退出崩溃。仅在导入后调用 Python 关闭接口不足以阻止初始化事件，见 [ONNX Runtime 1.30 官方隐私说明](https://github.com/microsoft/onnxruntime/blob/v1.30.0/docs/Privacy.md)。不改用户系统环境或第三方源码；如果外部程序已经先导入 ONNX Runtime，再导入本项目，不保证初始化前关闭。
 
-`observability.trace_enabled` 控制 CLI/MCP 入口创建/收集 Trace，`trace_file` 默认 `./logs/traces.jsonl`（相对仓库根目录）；每次执行追加一个完整 JSON 对象。MCP 查询返回的 `metadata.trace_id` 可关联记录。查询保留完整问题/候选/分数/顺序，摄取保留解析正文、切分内容、增强前后、编码统计和存储映射；异常只记类型，向量和图片载荷不落盘。关闭时不创建 Trace 文件。直接调用业务类时，传入的 Trace 由调用方收尾，业务类不重复收集。
+Gateway 双模型已通过五份公开样例的真实主链路验收。后续仍需审核个人资料可发送范围、建立真实语料的固定问题集和质量基线、验证实际 Agent 宿主；不把三题样例高分包装成通用召回率。
 
-Trace 包含私人正文，字段过滤不是正文自动脱敏，不能公开上传或提交。进度回调按完成阶段通知，共六步；最后的 6/6 在成功登记后发出，不代表各阶段耗时相等。后台 Trace 可视化尚未实现。
+## 8. 常见问题与已知限制
 
-### C5–C15：清理、编码、存储与完整摄取
+- `main.py` 启动后不退出：stdio 正在等客户端，诊断用 `--check`。
+- 找不到 Key：`.env` 不自动加载；确认正确启动进程环境，不把 Key 贴到聊天或日志。
+- 集合为空/找不到：检查摄取成功、集合名和各入口 `--data-dir` 一致，读取不会创建空库。
+- Ragas 导入报错：安装 `.[evaluation]` 的固定兼容版本，不仅看安装成功或元数据检查。
+- 重排没执行：默认关闭；Cross-Encoder 需准备本地权重且没有硬中断超时，不自动下载。
+- 文件重复跳过：历史主键仍是内容哈希，不区分集合/模型/配置；`--force` 重做不会自动清理旧 Chroma 块或图片。
+- Markdown 表格、代码、图片标记可能被字符切分拆散；未实现可靠版面/偏移、DOCX/OCR。
+- BM25 与向量/图片/历史没有跨库事务，更新、删除和恢复需检查各库状态。
+- 当前 DocumentManager 绑定 Chroma；metadata 读删不是所有 BaseVectorStore 的通用能力。
+- MCP 不提供 HTTP 远程部署；没有完整多用户 ACL。个人主页的公开资料范围与权限要单独设计。
 
-`IngestionPipeline.run()` 按上游编排：文件检查 → PDF/Markdown 解析 → 切块 → 清理/元数据/图片描述 → Dense＋Sparse 编码 → Chroma/BM25/图片登记 → 成功记录。真实模型增强默认关闭；分批失败立即报错，不返回错位的部分结果。CLI 复用同一入口，不复制处理逻辑。
+## 参考与学习记录
 
-```bash
-# 只列候选文件：不读取正文、不创建数据库、不调用模型。
-.venv/bin/python scripts/ingest.py --path /path/to/knowledge --collection personal --dry-run
+架构和 A–I 顺序以作者项目 [固定源码 f658c5a](https://github.com/jerry-ai-dev/MODULAR-RAG-MCP-SERVER/tree/f658c5a4011c8b826707a65a3b11ce9301b0626f) 为基线；本地加入 Gemini、Markdown、安全图片回查、明确评分失败/覆盖和可复现离线验收等适配。保留上游来源，不把离线证明写成生产或真实模型效果。
 
-# 以下会读取文档、调用配置的 Embedding 并写入存储；真实运行前自行确认语料与额度。
-.venv/bin/python scripts/ingest.py --path /path/to/knowledge/note.md --collection personal --verbose
-```
-
-`--path` 接受文件或目录，`--file` 为别名；支持大小写无关的 PDF/MD/Markdown。`--force` 绕过已成功记录；`--data-dir` 同时隔离 Chroma/BM25/SQLite/图片位置。退出码 0 为成功或跳过，1 为部分失败，2 为全失败或入口错误。CLI 不自动读取 `.env`；实际模型调用仍需进程环境变量中的 Key，勿提交凭据。
-
-Chroma 保存正文、向量及元数据；BM25 保存词项倒排索引，并用最终 Chroma ID 关联原文；SQLite 图片表只登记 Loader 已保存的文件路径。完整流程的 BM25 文件位于 `data/db/bm25/{collection}/{collection}_bm25.json`。
-
-已知限制：内容哈希跳过仍不区分集合/配置；文档更新替换旧 BM25 块，但不自动删除旧 Chroma 向量或图片记录；多存储没有跨库事务，中途失败允许重试而不保证回滚。字符切分和规则清理不保证 Markdown 结构保真，精确偏移及文档生命周期管理留后续阶段。不能把临时离线链路通过等同于真实语料的检索/回答质量通过。
-
-### C1–C3：对象、文件记录与文档解析
-
-Document 表达整篇解析结果，Chunk 表达切片，ChunkRecord 表达正文与可选向量；三者要求 metadata 含 source_path，支持 to_dict/from_dict。它们不是数据库表，ChunkRecord 也不会自动转换成 Chroma 的写入字典；独立偏移字段需要后续写入模块显式映射。
-
-SQLiteIntegrityChecker 接收明确的 db_path，计算原始文件 SHA256；成功记录才跳过，失败允许重试。SQLite 开启 WAL、每次操作关闭连接，跨进程回读和并发写入已测试；仅复现 C2 的四个核心操作，管理接口留后续阶段。跳过键仍只有内容哈希，不含 collection、模型、提示词或关联图片指纹；这是已知基线限制，不是完整增量版本管理。Loader 不会自行 mark_success。
-
-PdfLoader 使用 MarkItDown 本地转换、禁第三方插件，不配置 LLM/OCR；PyMuPDF 提取内嵌栅格图片并追加占位符。占位符在全文末尾，不代表原始版面位置。图片提取失败可保留文字，扫描 PDF、复杂表格和阅读顺序质量尚未验收。当前 MarkItDown 会把部分伪 PDF 当文本，因此转换前额外用 PDF 结构解析检查，避免后缀造成假成功。
-
-MarkdownLoader 接受 .md/.markdown（大小写不敏感）、UTF-8/BOM，规范换行后保留正文，不重新渲染表格或代码。有效 YAML mapping 移入 frontmatter，日期转换为 JSON 可序列化值；无效或非 mapping 的头部保留。标题按 frontmatter.title、首个 H1、文件名选取；来源字段不受 frontmatter 覆盖。
-
-标准 Markdown 图片由解析器识别，不用全文正则替换。范围内的 PNG/JPEG/WebP 本地图片验证后复制到管理目录，保留原件和 alt，记录相对最终 Document.text 的字符偏移。远程图片不下载；缺失、越界、格式/复制失败和无法可靠映射的标准引用保留原文并记录原因。HTML、Wiki、Mermaid 和解析器拒绝的特殊链接仅保留，不承诺全部列入 unprocessed_images；表格转义竖线造成的图片映射限制已有测试。source_root 默认是 MD 所在目录，可明确设置为整个语料根；它只约束图片资源，不等于访问控制。
-
-```python
-from src.libs.loader.markdown_loader import MarkdownLoader
-
-# 将示例路径换成明确选择的文档；这只解析，不会 Embedding 或入库。
-loader = MarkdownLoader(source_root="/path/to/knowledge", image_storage_dir="data/images")
-document = loader.load("/path/to/knowledge/note.md")
-```
-
-两个 Loader 仍可独立调用；C14/C15 已提供自动格式路由、目录批量入口和完整摄取。C7 启用时生成图片描述，再由编码模块计算向量、写入索引。未来只围绕个人 Gemini 推进，已有 Azure 后端保留但不再新增相关工作。
-
-### C4：文档切片包装
-
-DocumentChunker(settings).split_document(document)→list[Chunk] 使用 SplitterFactory 创建已有切分器，再将字符串片段包装成 Chunk。ID 为 {doc_id}_{index:04d}_{文本SHA256前8位}；继承 metadata，重建 chunk_index/source_ref/image_refs，只带当前块引用的 images，未引用时不复制整篇文档的图片列表。不读取图片文件、调用模型或生成向量。
-
-source_ref 仅写入 metadata，独立 Chunk.source_ref/start_offset/end_offset 保持 None。图片记录的偏移仍相对 Document.text，不转换为块内偏移；metadata 是浅拷贝，嵌套值和图片记录仍共享。page_num 只是首张关联图片的页码提示，MD 图片可能为 None，不保证整个块的页范围。
-
-沿用上游正则识别完整占位符：未知 ID 可保留 image_refs，但不虚构图片路径；重复引用不去重。字符切分可能切断标记，使关联丢失；代码内字面量占位符也可能被识别。表格、代码和图片结构保护、可靠偏移、Trace 和图片去重未在 C4 提前实现。
-
-```python
-from src.core.settings import load_settings
-from src.core.types import Document
-from src.ingestion.chunking.document_chunker import DocumentChunker
-
-document = Document("doc_demo", "# 示例\n\n正文", {"source_path": "demo.md"})
-chunks = DocumentChunker(load_settings()).split_document(document)
-```
-
-### 视觉接口：B8 的范围
-
-`ImageInput` 使用 path、data（原始 bytes）、base64 三选一，mime_type 默认 image/png。构造只检查来源数量，不读取文件、不解码 Base64，也不证明输入是有效图片。
-
-`BaseVisionLLM.chat_with_image(text, image, messages=None, trace=None, **kwargs)` 返回同一 ChatResponse。它独立于文本 BaseLLM，但底层可以选择同一个多模态模型；preprocess_image 默认原样返回，压缩与格式转换留给具体 adapter。
-
-`LLMFactory` 分别维护文字与视觉注册表。create_vision_llm 优先按 settings.vision_llm.provider 选后端；未提供视觉配置时，沿用上游的 settings.llm.provider 选名规则，但仍只查视觉注册表。配置的视觉 provider 未注册时直接报错，不回退到文字 adapter 或其他供应商。
-
-Settings 新增可选 vision_llm，提供时需要 enabled、provider、model、max_image_size，另有可选 Azure/服务地址字段；类型中不保存 api_key。max_image_size 校验为非布尔正整数，不意味着基类已经执行压缩。enabled 由后续 ImageCaptioner 调用方控制，工厂本身不把它当作禁用开关。
-
-默认 YAML 仍不配置 vision_llm，不自动调用视觉模型。B9 已注册 azure/gemini 视觉后端；文字 Gemini 的 chat 仍不接收图片，传图要显式使用 create_vision_llm 与 chat_with_image。C7 才把图片描述写回文档，Embedding 再编码文本；视觉 adapter 完成不等于图片已进入知识库。
-
-### 视觉后端：B9 的运行边界
-
-Azure 使用部署路径、api-version、api-key 和文字/image_url 消息，沿用上游图文协议；HTTP 实现复用项目已有 httpx，不再引入 requests。API 版本须通过配置、环境变量或构造参数明确提供，不照搬上游旧默认版本。Gemini 使用原生 generateContent，文字与图片字节组成 Content/Part，复用既有 Google SDK；不是转发到 Azure 或公司网关。
-
-两种后端默认使用 llm.timeout（当前 60 秒），构造参数可覆盖。密钥只从构造参数或对应环境变量读取：Azure 为 AZURE_OPENAI_API_KEY，Gemini 为 GEMINI_API_KEY；Azure 另需 endpoint/api_version。未选择的后端不要求它的 Key。自有 client 请求后关闭，注入 client 由调用方管理；自有 Google client 明确只尝试一次，注入 client 的重试策略由调用方设置。没有自动供应商回退。
-
-vision extra 增加 Pillow，本次验证版本为 12.3.0。路径/bytes 输入超限时保持比例缩小并保留原图文件；共享图片实现不会重复写一套处理逻辑。基线继续保留 Base64 不缩放、无 Pillow 不缩放的上游行为；缩小像素尺寸不保证文件字节更小。PNG/JPEG/WebP 测试通过，但 MIME 仍由调用方声明，不自动推断或保证与真实格式匹配。
-
-Azure 将 Base64 原样放入 data URL，Gemini 会解码标准 Base64 后交给 SDK；不支持把 HTTP 图片 URL 或完整 data URL 当作 ImageInput.base64。当前为单图、同步调用，只有文字历史；不包含 Files API、多图历史、图片描述缓存或完整 Trace。本轮只使用临时生成图片和模拟 HTTP，没有读取真实知识库图片、上传图片或消耗模型额度；真实可用性和描述质量另行验收。
-
-### 重排配置与边界
-
-`RerankerFactory` 已注册 llm 和 cross_encoder；默认仍为 enabled=false、provider=none，因此不会初始化或调用评分模型。LLM 与 Cross-Encoder 返回原候选的浅拷贝，新增顶层 rerank_score，不覆盖检索 score，也不改写文本和 metadata。同分保留输入顺序。
-
-| 后端 | 输入与输出 | 运行条件 |
-|---|---|---|
-| llm | 读取 config/prompts/rerank.txt，将问题和候选组成提示词；解析 passage_id/score JSON | 复用 Settings 中的 LLM，真正调用会消耗对应 API 额度 |
-| cross_encoder | predict 接受问题/文本对，返回每对一个有限分数；显式 top_k 可截断 | 注入评分器可离线运行；真实模型需单独安装运行库并准备本地权重 |
-
-LLM 沿用上游 0–3 标准，自定义提示词也须保持相同输出协议；未知、遗漏、重复 ID 或非法分数会抛 LLMRerankError，而不是静默丢弃候选。只有一个候选时跳过 LLM 调用。LLM 默认返回全部排序候选，截取数量留给 Core 编排。
-
-Cross-Encoder 不限制分数到 0–1 或 0–3，负分可以合法排序。只有显式传入的 top_k 参与截断；配置中的 rerank.top_k 留给后续 D6 编排。本轮没有安装 sentence-transformers 或下载权重；可选 rerankers extra 仅声明运行库。即使以后安装，加载也固定 local_files_only=True、trust_remote_code=False，不自动从模型站点拉取文件。示例 MiniLM 型号已修正为官方的 cross-encoder/ms-marco-MiniLM-L6-v2，但不是已验证的中文最终选型。
-
-两类模型失败均抛出可识别错误，是否使用原检索顺序回退由后续 D6 决定，本轮不自动回退或重试。同步 Cross-Encoder 没有强制中断本地推理的硬超时；只报告评分后端自身的 TimeoutError 或其他失败。默认仍不开启重排，真实 Gemini 评分和真实 Cross-Encoder 效果都未验收。
-
-### 本地向量存储
-
-`vector_store.provider=chroma` 已注册，默认路径为 `data/db/chroma`、collection 为 `knowledge_hub`。导入 Factory 不初始化数据库；创建对象后才加载可选 SDK。B7.6 只实现 upsert/query，不包括文档版本清理、图片文件、BM25 索引或完整摄取编排。
-
-输入记录沿用上游 `id / vector / metadata`。正文必须放在 `metadata.text`，并重复写入 Chroma 的 documents 与 metadatas；顶层 text 不参与映射，缺失 metadata.text 时用 ID。复杂元数据按上游规则转字符串，None 丢弃，空元数据使用占位字段。
-
-```python
-from src.core.settings import load_settings
-from src.libs.vector_store.vector_store_factory import VectorStoreFactory
-
-# 二维演示使用独立 collection，不与真实 768 维语料混用。
-store = VectorStoreFactory.create(load_settings(), collection_name="storage_demo_2d")
-store.upsert([{"id": "sample", "vector": [1.0, 0.0],
-               "metadata": {"text": "示例内容", "source_path": "sample.md"}}])
-results = store.query([1.0, 0.0], top_k=1, filters={"source_path": "sample.md"})
-store.client.close()
-```
-
-初始化已关闭自动 Embedding、匿名遥测和 reset。查询沿用上游 `score=max(0, 1-cosine_distance/2)`，正交向量分数为 0.5，不是原始余弦相似度或答案正确概率。多个过滤字段转换为等价 $and，以兼容当前 SDK。
-
-测试只写入临时目录，结束后关闭 SDK client 并清理；写入进程退出后由新进程读回，证明不是仅在内存里命中。测试进程禁止 socket 连接，在临时工作目录运行，子进程移除模型 Key，避免 SDK 全局配置读项目 .env。生产使用时仍须自行管理服务生命周期、备份与访问控制，元数据过滤本身不等于完整授权。
-
-### 递归切分
-
-`ingestion.splitter=recursive` 已注册，使用 `langchain-text-splitters` 的真实算法。默认 `chunk_size=1000`、`chunk_overlap=200`，长度按字符计算，不是 token；重叠是目标值，不保证每对相邻块精确重叠 200 字符。构造参数可以覆盖 Settings，其他库选项通过构造时的 kwargs 传递。
-
-```python
-from src.core.settings import load_settings
-from src.libs.splitter.splitter_factory import SplitterFactory
-
-splitter = SplitterFactory.create(load_settings())
-chunks = splitter.split_text("# 示例\n\n第一段内容。\n\n第二段内容。")
-```
-
-当前保留上游分隔符，不额外识别中文句号、表格或代码围栏。短 Markdown 样例能保持完整，但超长代码块会被拆开；默认裁掉块首尾空白，也不是逐字符无损重组。特殊自定义分隔符产生空结果时沿用上游回退原文，这种情况下块可能超过 chunk_size。Chunk 的 ID 和来源等元数据留给 C 阶段。
-
-### 模型配置与调用
-
-| 能力 | 已注册 provider | 默认选择 |
-|---|---|---|
-| LLM | `openai`、`azure`、`deepseek`、`ollama`、`gemini` | `gemini` / `gemini-3.7-flash` |
-| Embedding | `openai`、`azure`、`ollama`、`gemini` | `gemini` / `gemini-embedding-2` / 768 维 |
-
-默认型号采用官方示例，须以个人账号实际可用模型为准。公司网关没有配置，也没有自动回退。切换后端时要同时检查 provider、model、连接参数及向量维度，不能只改 provider。更换 Embedding 模型后需要重新编码已有文档。
-
-密钥仅通过环境变量或构造参数传入：`OPENAI_API_KEY`、`AZURE_OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`GEMINI_API_KEY`。不要将密钥写入 YAML、源码或 Git；未选中的后端不要求密钥。Azure 另需 endpoint 和 api_version，可通过配置的 `base_url`、`api_version` 或 `AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_API_VERSION` 提供；部署名使用 `deployment_name`。Ollama 可使用 `base_url` 或 `OLLAMA_BASE_URL`，默认本地端口 11434。
-
-安装 `providers` extra 后，在已配置本地环境变量的情况下可使用以下入口。**这些调用会真实请求服务并消耗额度；启动 main.py 不会自动执行它们。**
-
-```python
-from src.core.settings import load_settings
-from src.libs.llm.base_llm import Message
-from src.libs.llm.llm_factory import LLMFactory
-from src.libs.embedding.embedding_factory import EmbeddingFactory
-
-settings = load_settings()
-llm = LLMFactory.create(settings)
-response = llm.chat([Message("user", "用一句话解释 RAG")])
-
-encoder = EmbeddingFactory.create(settings)
-documents = encoder.embed(["RAG 通过检索文档辅助回答。"])
-query = encoder.embed(["RAG 是什么？"], task_type="RETRIEVAL_QUERY")
-```
-
-文本 chat 接口仅支持同步文本调用，不包含流式或工具调用；图片输入使用独立 chat_with_image 接口。Gemini 使用原生 generateContent，系统消息独立传递；Embedding 2 为每段文本构造独立 Content，并分别处理文档与查询的检索格式。超长输入不在本地估算 token，上游服务错误会作为失败返回；Ollama 明确关闭自动截断。生成的 max_tokens 保留上游兼容参数，首次启用其他模型时须核对它的参数支持。
-
----
-
-## 🏗️ 项目概述
-
-### 这个项目是什么
-
-本项目将 RAG 面试中最常见的核心环节——**检索（Hybrid Search + Rerank）**、**多模态视觉处理（Image Captioning）**、**RAG 评估（Ragas + Custom）**、**生成（LLM Response）**——以及当下热门的应用协议 **MCP（Model Context Protocol）** 串联为一个完整的、可运行的工程项目。
-
-**项目的一大亮点是极易适配到你自己的业务中**。得益于全链路可插拔架构，你可以快速将它结合到自己已有的项目里，无论你的背景和需求如何，都能找到适合自己的使用方式。具体的使用策略会在后文 [谁适合用这个项目 & 怎么用](#-谁适合用这个项目--怎么用) 中详细展开。
-
-### 不只是项目，更是一整套思路
-
-**比这个项目本身更有价值的，是它背后蕴含的一整套工程化思路**：
-
-- 如何编写 **DEV_SPEC**（开发规格文档）来驱动开发
-- 如何用 **Skill** 基于 Spec 自动完成代码编写
-- 如何用 **Skill** 进行自动化测试、打包、环境配置
-- 如何基于可插拔架构进行扩展（比如扩展到 Agent）
-
-**学会了思路，你可以自己做全新的项目和扩展**。以上每一步的具体做法、设计思路，在笔记中都有对应的视频讲解，建议配合观看。
-
-### 核心能力一览
-
-| 模块 | 能力 | 说明 |
-|------|------|------|
-| **Ingestion Pipeline** | PDF → Markdown → Chunk → Transform → Embedding → Upsert | 全链路数据摄取，支持多模态图片描述（Image Captioning） |
-| **Hybrid Search** | Dense (向量) + Sparse (BM25) + RRF Fusion + Rerank | 粗排召回 + 精排重排的两段式检索架构 |
-| **MCP Server** | 标准 MCP 协议暴露 Tools | `query_knowledge_hub`、`list_collections`、`get_document_summary` |
-| **Dashboard** | Streamlit 六页面管理平台 | 系统总览 / 数据浏览 / Ingestion 管理 / 摄取追踪 / 查询追踪 / 评估面板 |
-| **Evaluation** | Ragas + Custom 评估体系 | 支持 golden test set 回归测试，拒绝"凭感觉"调优 |
-| **Observability** | 全链路白盒化追踪 | Ingestion 与 Query 两条链路的每一个中间状态透明可见 |
-| **Skill 驱动全流程** | 从编写到测试、打包、配置一键完成 | auto-coder / qa-tester / package / setup 等 Skill 覆盖完整开发生命周期（笔记中每个 Skill 的使用和设计思路均有讲解，请参考配套视频） |
-
-### 技术亮点
-
-**🔌 全链路可插拔架构**：LLM / Embedding / Reranker / Splitter / VectorStore / Evaluator 每一个核心环节均定义了抽象接口，支持"乐高积木式"替换，通过配置文件一键切换后端，零代码修改。
-
-**🔍 混合检索 + 重排**：BM25 稀疏检索解决专有名词精确匹配 + Dense Embedding 解决同义词语义匹配，RRF 融合后可选 Cross-Encoder / LLM Rerank 精排，平衡查全率与查准率。
-
-**🖼️ 多模态图像处理**：采用 Image-to-Text 策略，利用 Vision LLM 自动生成图片描述并缝合进 Chunk，复用纯文本 RAG 链路即可实现"搜文字出图"。
-
-**📡 MCP 生态集成**：遵循 Model Context Protocol 标准，可直接对接 GitHub Copilot、Claude Desktop 等 MCP Client，零前端开发，一次开发处处可用。
-
-**📊 可视化管理 + 自动化评估**：Streamlit Dashboard 提供完整的数据管理与链路追踪能力，集成 Ragas 等评估框架，建立基于数据的迭代反馈回路。
-
-**🧪 三层测试体系**：Unit / Integration / E2E 分层测试，覆盖独立模块逻辑、模块间交互、完整链路（MCP Client / Dashboard）。
-
-**🤖 Skill 驱动全流程**：内置 auto-coder（自动编码）、qa-tester（自动测试）、package（清理打包）、setup（一键配置）等 Agent Skill，覆盖从代码编写到测试、打包、部署的完整开发生命周期。每个 Skill 的使用方法和设计思路在笔记的项目部分均有讲解视频，可参考学习。
-
-> 📖 详细架构设计、模块说明和任务排期请参阅 [DEV_SPEC.md](DEV_SPEC.md)
-
----
-
-## 📂 分支说明
-
-本项目提供三个分支，面向不同使用场景，请根据自身需求选择：
-
-### `main` — 最干净的完整代码
-
-- 始终只有 **1 个 commit**，包含项目的最新完整代码
-- **适合人群**：
-  - 想要快速体验项目完整功能的同学
-  - 时间紧迫，想要快速拿到一个项目去面试、跳过中间开发过程的同学
-  - 想要直接在该项目基础上做二次扩展的同学
-- **使用方式**：克隆后直接运行 Setup Skill 即可体验
-
-### `dev` — 保留完整开发记录
-
-- 代码与 `main` 完全一致，但保留了完整的 commit 历史
-- 记录了从零开始逐步构建的每一步过程，包含大量中间节点
-- **适合人群**：想了解项目是如何一步步从零搭建起来的同学，可以通过 commit 历史回溯开发思路
-
-### `clean-start` — 干净起点，从零开始
-
-- 仅包含工程骨架（Agent Skills + DEV_SPEC），所有任务进度清零
-- 保留了完整的 Skill 配置，可以使用 Agent 辅助开发
-- **适合人群**：
-  - 时间充分、想要从头开发的同学（**强烈建议**）
-  - 想要体验完整工作流的同学：写 Spec → 拆任务 → 写代码 → 写测试 → 迭代优化
-  - 甚至可以基于自己的理解重新设计架构，用自己的思路实现，深度理解每一个模块
-  - 使用我们讲的所有对应思路（Spec 驱动开发、测试先行、可插拔架构等）来完成整个项目
-- **核心理念**：整个项目的代码编写是 **让 AI 基于 DEV_SPEC 来自动完成的**，你自己不需要手写代码。AI 通过 Skill 读取 Spec 中的任务定义、架构设计和接口规范，自动生成符合规格的代码。这个思路请参考笔记对应视频讲解：**5.1 项目 Skills 使用：如何让 AI 使用 Skill 遵循 DEV_SPEC 完成代码**。
-
----
-
-## 🚀 快速开始
-
-### 1. 克隆项目
-
-```bash
-git clone <repo-url>
-cd Modular-RAG-MCP-Server
-```
-
-### 2. 一键配置（Setup Skill）
-
-本项目提供了 **Setup Skill** 一键完成所有环境配置，包括：Provider 选择 → API Key 配置 → 依赖安装 → 配置文件生成 → Dashboard 启动。
-
-在 VS Code 中打开项目，通过 Copilot / Claude 对话框输入：
-
-```
-setup
-```
-
-Agent 会自动引导你完成全部配置流程。
-
-> 💡 如果不熟悉 Skill 的使用方式，请观看配套笔记中的 **Setup Skill 使用讲解视频**。
-
----
-
-## 🎯 谁适合用这个项目 & 怎么用
-
-大家的背景不同——有的校招、有的社招；基础也不同——有的有 AI 项目经验、有的是转方向。因此对于这个项目的使用策略也应该不同，**请一定灵活使用，切忌生搬硬套**。
-
-不过有一点是通用的：**整套项目背后的思路**——如何写 Spec 快速拉起一个项目、如何用 Skill 驱动 AI 自动编码和测试——这些工程化方法论适用于任何项目，值得所有人参考学习。
-
-对于项目本身在不同场景下的使用策略，我会提供一些具体的例子，并以我自己的亲身经历展开——**如果是我自己，面对不同的情况，我会怎么使用这个项目**——给大家作为参考。
-
-### 1. 纯学习 RAG —— 把项目当作 RAG 全流程的学习材料
-
-这个项目本身就是一个完整的 RAG 系统，可以作为学习 RAG 的配套实战项目。
-
-我最开始学习 RAG 的时候，看的是这本书：**《大模型RAG实战：RAG原理、应用与系统构建》**（汪鹏、谷清水、卞龙鹏等人工智能领域专家编著）。你完全可以结合这本书来学习 RAG，书中涉及的典型环节——检索、生成、向量数据库、分块策略、重排序等——其实不管你看哪本 RAG 相关的书，核心内容都是这些。
-
-**这个项目就是把这些步骤串起来了**，所以它可以作为一个通用的 RAG 全流程项目来学习整个过程。你可以配这本书，我相信你也可以配其它的 RAG 书籍，因为流程是通的。面试 RAG 其实也无非是这些过程的组合、原理，以及在实际中遇到的困难和优化。
-
-### 2. 时间紧迫 —— 缺一个项目拿去面试
-
-如果你现在没有 AI 相关项目、急需一个项目去面试，那么可以：
-
-1. **直接使用本项目**，克隆 `main` 分支，用 Setup Skill 跑起来
-2. **结合 Resume Writer Skill** 写自己的简历（Skill 会根据你的背景定制化生成项目描述）
-3. **尝试理解项目**，跑通核心流程，结合我后续总结的该项目面试问题，先去面试
-4. **随着面试深入理解、扩展项目**——面试本身就是最好的学习驱动力
-
-比如现在 3 月份，需要找暑期实习的同学，时间紧迫——先写上去，一边面试一边学习，有时间再扩展。解决你着急面试没有项目的燃眉之急。思路就是：**先写上去 → 去面试 → 根据面试反馈改进项目**。
-
-通常暑期实习从 3 月到 7 月都有机会。找到了实习、有了一个大模型项目经验后，再以此为跳板继续学习——7~10 月秋招，甚至到明年 3 月春招，你有大量的时间持续积累。现在开始虽然看起来有点晚，但其实不晚。如果你能保持学习节奏，从现在到明年 3 月，学习整整一年，校招上岸大模型方向绝对没有问题。**关键在于你自己能不能保持这么长时间的学习力。**
-
-### 3. 时间相对充分 —— 以本项目为起点进行扩展
-
-你可以把这个项目作为起点，根据自己的发展方向进行针对性扩展。DEV_SPEC 中也写了扩展方向，这里列几个常见的：
-
-- **想补充 Agent 知识**：自己实现 Agent 端，做一些上下文处理、Tool Calling、ReAct 逻辑，把本项目作为 Agent 的一个模块和能力，变成一个 **Agent + RAG** 的项目
-- **想展示后端工程能力**：加上后端部署能力，写 Dockerfile，做 CI/CD 流水线，加上监控和日志收集
-- **想把 RAG 做深入**：扩展到 Agentic RAG、Graph RAG 等高级形态，或者在检索策略上做更多优化实验
-
-每个人发展方向不一样——就像项目配套的 Resume Writer Skill，它写简历的时候会先问你的背景和情况。你定位大模型应用开发工程师、RAG 工程师、全栈工程师，校招、社招的要求都是不一样的（具体大模型不同岗位介绍和技术栈可以看笔记的**大模型岗位介绍**部分），所以需要自己进行针对性扩展。
-
-> **强烈建议**：不管你什么背景、怎么扩展，你大概率需要结合自己的业务来写简历。所以**至少试一下**——把你自己领域的文档（金融、法律、医疗，或者你的业务文档）丢进去，看一下检索效果。如果效果不好，再去调整和改进。这个过程本身就是最好的学习，也是面试时最有说服力的实战经验。
-
-### 4. 时间特别充分 —— 从零体验完整工作流
-
-如果你时间充足，我建议你从 `clean-start` 分支开始，甚至在 `clean-start` 的基础上**删掉 DEV_SPEC**，从文档设计开始，一点点体验：
-
-**文档设计 → AI 写代码 → 改进迭代 → 测试 → 部署**
-
-整个过程的方法论。其中 DEV_SPEC 怎么写、Skill 怎么设计，这些都在笔记项目部分的对应视频中有讲解。你可以重新设计文档、改进文档，甚至直接做 Agent 方向的东西，来走完整个流程。
-
-这样做你会学习到**开发一个项目的完整思路**。这套方法最大的好处是**下限极低**——几乎你都能设计出来、完成整个项目。这样你既学会了思路，又学会了过程，而且项目可以高度定制。群里已经有很多朋友都这么做了。
-
-### 5. 融入现有项目 —— 把 RAG 能力集成到你已有的项目中
-
-这其实也是一种很好的策略，我自己可能也会用这种方式。以我亲身经历现身说法：
-
-我之前找工作时，其实已经有 2 个 Agent 项目了，只是 RAG 流程跑得很粗。我简历上大概的写法是"Agent 项目做了啥，其中涉及了一些 RAG 的知识"。面试的时候，面试官多少都会问 RAG 的内容，然后我和他讲，但因为之前项目的 RAG 系统很浅——其实就是做了一个基本的 Embedding 向量匹配，没有粗排、重排等策略——所以面试官一问就比较浅。
-
-做了这个项目之后，一种处理方式是**把本项目的 RAG 能力融入到之前的 Agent 项目中**，在简历上不作为独立项目，而是作为 Agent 项目的一部分来描述。例如：
-
-> *"……项目中使用自研的模块化 RAG 系统进行知识检索，采用 BM25 + Dense Embedding 混合召回并通过 RRF 融合排序，结合 Cross-Encoder 重排序提升 Top-K 精准度；支持多模态文档处理（PDF 解析 + Image Captioning），通过 MCP 协议暴露标准化工具接口供 Agent 调用。集成 Ragas 评估框架，建立 Golden Test Set 回归测试机制，持续优化检索质量……"*
-
-这样你原有的 Agent 项目就有了 RAG 深度，面试官再问你就有东西可讲了。
-
-### 6. 产品经理 —— 对，你没看错，PM 也可以用这个项目
-
-大模型产品经理面试越来越多地会考 RAG 相关知识，有些公司甚至要求产品经理自己写一个 POC（Proof of Concept）再交给开发。**这个项目和背后的方法论，完全可以帮你做到这一点。**
-
-**为什么 PM 可以用：**
-
-1. **面试需要**：大模型产品岗会考 RAG 的基本原理和流程，你通过这个项目可以直观感受 RAG 的整个过程——从文档摄取、分块、向量化、检索、重排到最终生成，建立起产品层面的理解
-2. **POC 能力**：你完全可以用这套方法构建出整个项目——写文档（DEV_SPEC），或者直接用现有的文档，然后用 Skill 让 AI 帮你生成代码。面试的时候你说的是你的思路和产品设计，代码是 AI 帮你写的，这在当下完全合理
-3. **不需要关心技术细节**：产品不用关心每一行代码怎么写，但通过跑通这个流程，你能从产品层面思考痛点——比如检索不准怎么定义指标、用户体验上怎么设计反馈机制、数据质量如何影响 RAG 效果等
-
-**具体怎么做：**
-- 克隆 `main` 分支，用 Setup Skill 跑起来，体验完整流程
-- 把你自己业务领域的文档丢进去，看检索效果，思考产品层面的优化方向
-- 面试时讲你的产品思路和设计思考，技术实现部分说明是用 AI 辅助完成的
-
-> 💡 笔记中也提供了 **Vibe Coding** 相关教程（如 Tina Huang 老师的讲解），非常适合非技术背景的同学参考，用 AI 快速构建原型。
-
-### 关于"项目浅"这件事
-
-最后我想独立提一点（这一点适用于上面所有情况）：
-
-**所有项目的深入优化不是一步到位的。**
-
-如果你是转行，项目都是自己做的，多少会遇到面试官觉得你项目浅的问题。我之前也提到过这一点，但不用害怕：
-
-1. **项目深度不是入行的必要条件。** 我去年拿了 6 个 offer，其中包括大厂 offer，即使这样，还是有面试官觉得我项目浅。面试还会考虑很多其他方面——理论基础、算法能力、背景匹配、知识广度等等。不要因为觉得自己转行项目浅就觉得自己转不了。
-
-2. **项目是在不断优化和深入的。** 面试官说你项目浅，你听他的反馈，一定能听出来他为什么觉得浅——比如觉得你数据不够复杂，那你就造一些复杂数据；觉得你图片处理太简单，那你可以扩展多模态策略。我自己也是在面试过程中不断往项目里加东西：我之前做的 Agent 项目，随着面试推进，我往里加了部署、训练、反思数据、评估模块——整个过程都是随着面试同步进行的。
-
-**给自己预留多一点面试时间，一边面试，一边改进和加深。** 所以这里就又提到了整套项目的思路——学会这些思路，你才能持续扩展，而且扩展的门槛很低，都是想好想法让 AI 写嘛，所以不用怕。
-
-说一个真实数据：**这个项目从立项到完成，是我下班后用了大概 2 个月时间做的**，期间我还要上班、做自媒体、自媒体也有其他内容要产出。所以我希望你不要完全指望这个项目作为一个不用扩展就特别深入的项目，特别是社招的同学。但反过来想——两个月的下班时间就做出了这些，如果你学会了这套方法，自己扩展的速度会有多快？
-
-方法都有了，所有的方案、过程、记录都有留档和视频讲解。**最终一定要靠你自己去扩展、迭代，做成最适合你自己的项目。**
-
----
-
-## 📝 简历参考
-
-> ⚠️ **强烈建议**：请使用项目内置的 **Resume Writer Skill** 来生成你的简历项目经历，而不是直接复制下面的示例。
->
-> 简历项目经历**一定是针对性的**——需要结合你自己的业务背景、目标岗位、技术侧重来定制化生成。下面的示例仅用于展示 Skill 的输出效果和不同场景的写法参考，**直接照搬没有任何意义**。
->
-> **如何使用 Resume Writer Skill**：在 VS Code 中通过 Copilot / Claude 对话框输入 `写简历` 或 `resume`，Skill 会引导你完成画像采集并自动生成四段式简历。具体使用方式和设计思路请参考笔记中 **项目部分的视频讲解**。
-
-### Resume Writer Skill 工作方式
-
-Skill 采用 **"写作原则 + 项目亮点 + 用户画像 = 定制化简历"** 的三角模型，流程如下：
-
-1. **画像采集**：Skill 会询问你的目标岗位（RAG Engineer / Backend / Agent 等）、业务背景、技术侧重、特殊要求
-2. **亮点匹配**：根据你的岗位方向，从项目 10 大技术亮点中筛选 3-5 个最匹配的写入 bullet points
-3. **四段式生成**：严格按 **背景 → 目标 → 过程 → 结果** 结构输出，每条 bullet 遵循"动词开头 + 技术细节 + 量化效果"
-4. **面试追问预测**：自动生成 3-5 条面试官可能的追问，帮你提前准备
-
-### 示例一：校招 · RAG Engineer 方向
-
-> 以下为 Skill 基于"校招、RAG 方向、通用框架模式"生成的示例输出：
-
-**智能知识检索与问答系统** | 2024.09 - 2025.02 | 独立设计与开发
-
-**背景**：针对企业级知识库场景中文档分散、检索精度不足、AI 应用难以接入私有知识的共性痛点，设计并实现了模块化 RAG 检索框架。
-
-**目标**：构建基于混合检索 + MCP 协议的智能知识问答系统，实现精准语义检索与 AI Agent 直接调用私有知识库的能力，将文档问答准确率提升至 90% 以上。
-
-**过程**：
-- 设计 BM25 + Dense Embedding 混合召回架构，通过 RRF 融合排序平衡查全率与查准率，结合 Cross-Encoder 重排序将 Top-10 命中率提升约 25%
-- 构建全链路 Ingestion Pipeline（PDF 解析 → Markdown → 语义分块 → Metadata 增强 → Embedding → Upsert），集成 Vision LLM 实现图片自动描述并缝合进 Chunk，复用纯文本链路即可"搜文字出图"
-- 实现 LLM / Embedding / Reranker / VectorStore 全链路可插拔架构，定义统一抽象接口，通过配置文件一键切换后端 Provider，支持 4+ LLM Provider 零代码切换
-- 集成 Ragas + Custom 双评估体系，建立 Golden Test Set 回归测试机制，覆盖 Faithfulness / Relevancy / Recall 等维度，拒绝"凭感觉"调优
-- 基于 Skill 驱动全流程开发，通过 auto-coder / qa-tester / setup / package 等 5 大 Agent Skill 覆盖编码、测试、配置、打包完整生命周期，2 个月业余时间完成 68 个子任务的全量交付
-
-**结果**：系统支撑 5000+ 篇文档的实时语义检索，检索准确率（Hit Rate@10）达 92%，端到端查询延迟控制在 800ms 以内，三层测试体系（Unit / Integration / E2E）覆盖 1200+ 测试用例。
-
-**技术栈**：Python / LangChain / ChromaDB / BM25 / Cross-Encoder / MCP Protocol / Streamlit / Ragas / Azure OpenAI
-
-### 示例二：社招 · 已有 Agent 项目，融入 RAG 深度
-
-> 以下为 Skill 基于"社招、Agent 方向、Windows 平台开发业务背景"生成的示例输出（将 RAG 能力融入已有 Agent 项目）：
-
-**Windows 平台智能知识助手** | 2024.06 - 2025.02 | 核心开发
-
-**背景**：在 Windows 平台开发团队中，版本发布相关信息（Release Notes、变更日志、补丁公告、兼容性说明等）分散于多个 Wiki、文档仓库和内部系统，工程师排查版本差异或回答客户问题时需跨系统翻找，现有关键词搜索无法理解语义，导致检索效率低、信息遗漏频发。
-
-**目标**：为团队构建基于 Agent + RAG 架构的智能知识助手，实现跨系统文档的语义检索与自动问答，通过 MCP 协议集成至工程师日常工具链（VS Code / Claude Desktop），将文档查找时间缩短 60% 以上。
-
-**过程**：
-- 设计 Agent + RAG 分层架构，Agent 端负责意图识别与 Tool Calling，RAG 端提供 BM25 + Dense Embedding 混合召回 + Cross-Encoder 精排的两段式检索能力，通过 MCP 协议暴露标准化工具接口供 Agent 调用
-- 实现全链路 Ingestion Pipeline，支持 PDF / Markdown 多格式文档解析，集成 Vision LLM 自动生成图片描述（架构图、截图等），解决"搜文字出图"的多模态检索需求
-- 构建可插拔后端架构，LLM / Embedding / Reranker / VectorStore 均定义抽象接口，支持 Azure OpenAI ↔ DeepSeek ↔ Ollama 一键切换，适配团队不同网络环境
-- 搭建 Streamlit Dashboard 管理平台，提供数据浏览、Ingestion 追踪、查询追踪、评估面板六大功能页，实现全链路白盒化可观测
-- 集成 Ragas 评估框架 + Golden Test Set 回归测试，在版本迭代中持续监控检索质量，Faithfulness 评分稳定在 0.85 以上
-- 采用 Skill 驱动全流程开发模式，编写 DEV_SPEC 规格文档驱动 auto-coder 自动编码、qa-tester 自动测试与修复、setup 一键环境配置，5 大 Agent Skill 覆盖完整开发生命周期，2 个月业余时间完成 68 个子任务交付
-
-**结果**：系统覆盖团队 8000+ 篇技术文档，工程师日均文档查询时间从 15 分钟缩短至 3 分钟，检索准确率 Hit Rate@10 达 90%，已通过 MCP 协议接入 3 个内部 AI 工具，累计处理查询 2 万+ 次。
-
-**技术栈**：Python / Agent / Tool Calling / RAG / BM25 / Dense Retrieval / Cross-Encoder / MCP Protocol / ChromaDB / Streamlit / Ragas / Skill-Driven Development / Azure OpenAI
-
-### 示例三：社招 · 后端工程师转 AI 方向
-
-> 以下为 Skill 基于"社招转 AI、后端/架构方向、金融合规业务背景"生成的示例输出：
-
-**合规智能文档检索系统** | 2024.10 - 2025.02 | 设计与主导开发
-
-**背景**：在某金融机构合规部门，法规文件和内部政策文档持续增长至万级规模，合规团队在审查和咨询场景中需要快速定位特定条款，但现有全文搜索系统只能精确匹配关键词，无法理解"反洗钱"与"AML"等语义近义表达，条款定位效率低下。
-
-**目标**：设计并实现模块化 RAG 检索系统，将语义检索能力引入合规文档管理流程，支持近义词、跨语言条款匹配，目标将合规条款定位准确率提升至 90% 以上。
-
-**过程**：
-- 主导系统架构设计，采用全链路可插拔架构，LLM / Embedding / Reranker / Splitter / VectorStore 均定义抽象接口与工厂模式，通过 YAML 配置一键切换后端，零代码修改即可适配不同部署环境
-- 实现 BM25 稀疏检索 + Dense Embedding 语义检索的混合召回策略，通过 RRF 融合排序兼顾专有名词精确匹配与语义近义匹配，检索准确率较纯向量方案提升 22%
-- 构建完整的数据摄取管线，支持 PDF 解析 → 语义分块 → Chunk Refinement → Metadata Enrichment → 向量化存储，实现 DocumentManager 幂等管理，保证文档更新时的数据一致性
-- 搭建三层测试体系（Unit / Integration / E2E），覆盖 1200+ 测试用例，集成 Ragas 评估框架建立自动化回归机制，确保迭代过程中检索质量不退化
-- 基于 MCP 协议暴露标准化工具接口，支持 GitHub Copilot / Claude Desktop 等 AI 助手直接调用，实现"一次开发、多端调用"的服务化部署
-- 实践 Skill 驱动全流程工程化方法，基于 DEV_SPEC 规格文档驱动 AI Agent 自动完成编码（auto-coder）、测试（qa-tester）、环境配置（setup）、清理打包（package），68 个子任务全量由 Agent 交付，开发周期压缩至 2 个月业余时间
-
-**结果**：系统上线后支撑 12000+ 篇合规文档的实时语义检索，条款定位准确率从 68% 提升至 91%，单次查询延迟控制在 700ms，合规团队文档审查效率提升约 50%。
-
-**技术栈**：Python / 可插拔架构 / 工厂模式 / BM25 / Dense Retrieval / RRF / Cross-Encoder / ChromaDB / MCP Protocol / Streamlit / Ragas / Skill-Driven Development / Azure OpenAI
-
----
-
-> 💡 **使用提醒与重要说明**：
->
-> **1. 关于放大策略**：Resume Writer Skill 中内置了我设计的**放大策略**——AI 会在合理范围内对你的项目经历进行包装和放大（例如量化指标、业务规模等）。这是我允许的，也是简历写作的正常做法。但这意味着：**生成简历后，你必须想清楚面试官可能针对每一条追问什么、你该怎么回答**。Skill 在生成简历的同时会自动给出 3-5 条面试追问预测，请认真准备这些问题。
->
-> **2. 把简历当作实践清单**：简历中写到的每一个技术点，你都应该**真正去试一下**。比如简历写了"检索准确率提升 XX%"——那你就应该在自己的数据上跑一下，看看实际效果如何，过程中遇到了什么问题，你是怎么调优解决的。这些实践经验才是面试时真正有说服力的内容，也是你真正学到东西的过程。简历里没涉及到的部分（比如你没试过多模态、没跑过评估），也可以以此为契机去做代码实验。
->
-> **3. 生成的是初稿，请务必结合自身情况修改**：Skill 生成的简历是**初稿**，不是终稿。你需要根据自己的实际情况进行调整——哪些技术你确实深入用过、哪些只是了解、哪些数据需要换成你自己的。简历写作有一条铁律：**写在简历上的东西，你一定要会讲**。即使某个点是放大的，你也要想清楚面试官会怎么问、你怎么自圆其说。说不清楚的东西宁可不写，写上去就要能扛住追问。
->
-> **4. 方法比模板更重要**：整个简历编写的思路是我的——包括放大策略、四段式结构（背景 → 目标 → 过程 → 结果 → 技术栈）、亮点匹配逻辑等，这些都沉淀在 Resume Writer Skill 里。如果你有自己更信任的简历模板，或者你对项目做了扩展修改，完全可以去修改 Skill 本身来适配。**学会这套"用 Skill 沉淀方法论、让 AI 按规则执行"的逻辑，比简历本身更有价值**——这个思路可以复用到你未来任何项目的简历编写中。
->
-> **5. 强烈建议写上 Skill 驱动全流程**：我个人的意见是，**Skill 驱动全流程开发这个闭环，适合写在任何人的简历上**。Skill 是当下非常热门的方向，已经是面试中的必考内容，很多公司内部也在研究如何用 Skill 加速项目构建。讲清楚你是如何使用 Skill 完成整个项目从编码 → 测试 → 修复 → 配置 → 打包的完整闭环，这本身就是一个比较创新和前沿的亮点，面试官会对此印象深刻。关于 Skill 相关内容在面试中怎么讲、怎么回答追问，我后面也会提供一些例子给大家参考。
-
----
-
-## ❓ 常见问题
-
-### 1. 如何切换 Provider（比如换成 Qwen / DeepSeek / Ollama）？
-
-**非常简单——直接问 AI 帮你完成即可。**
-
-项目从架构设计上使用了**工厂模式（Factory Pattern）**，Provider 的扩展和切换非常方便。你只需要理解内部原理就会发现：不同 API 本质上都是类似的 HTTP 请求，甚至大多数都遵循 OpenAI 的请求格式，切换起来特别容易。
-
-**具体操作方式有两种：**
-
-1. **使用 Setup Skill（推荐）**：运行一键 Setup Skill，AI 会主动询问你想用哪个 Provider，引导你填入 API Key，然后自动帮你完成代码适配和配置生成。
-2. **直接让 AI 帮你改**：把你想切换的 Provider 告诉 AI（如 "帮我切换到 Qwen" 或 "帮我配置 DeepSeek"），AI 能根据工厂模式的架构自动完成代码编写。
-
-> **原理说明**：项目的 `src/libs/` 下的 LLM、Embedding、Reranker 等模块都使用工厂模式，新增一个 Provider 只需要：① 新增一个 Provider 类；② 在工厂注册；③ 更新 `settings.yaml` 配置。AI 完全可以自动完成这些步骤。
-
-### 2. 项目评估（Custom Evaluator）与 Cross-Encoder Reranker 部分
-
-这两个模块的**框架代码已经搭好，但尚未经过完整测试**，感兴趣的同学可以自行完善：
-
-| 模块 | 状态 | 需要做什么 |
-|------|------|-----------|
-| **自定义评估（Custom Evaluator）** | 框架已有，未测试 | 定义评估方法，准备对应的测试数据集 |
-| **Cross-Encoder Reranker** | 框架已有，未测试 | 需要下载本地重排模型（如 `cross-encoder/ms-marco-MiniLM-L-6-v2`） |
-
-**这些 AI 都能帮你写出来**。把需求描述清楚，AI 可以帮你实现评估方法、准备数据、下载模型并完成集成测试。完成这些扩展对面试也是加分项，体现了你的独立扩展能力。
-
-### 3. 项目报错 / Bug 怎么办？
-
-**这不是一个经过广泛测试的生产级项目，而是一个面试导向的实战项目。** 遇到报错是正常的。
-
-- **对面试的影响**：项目的 Bug 对面试几乎没有影响——面试官不会去实际运行你的项目，他们关注的是你对架构、原理和设计决策的理解。
-- **如何修复**：最简单的方式是**把错误信息直接丢给 AI**，绝大多数问题 AI 都能帮你修复。
-- **参考资源**：笔记中推荐的 Tina Huang 的视频里也介绍了这种用 AI 快速修复错误的方法。
-
-### 4. 想摄取 PDF 以外的文档格式（Word / Markdown / HTML 等）怎么办？
-
-**直接问 AI 帮你扩展即可。**
-
-项目的 Loader 层采用了可插拔的抽象设计（`BaseLoader`），目前默认实现了 PDF Loader。如果你需要支持 Word、Markdown、HTML 等其他格式，整体架构已经设计好了扩展点，让 AI 帮你新增一个对应的 Loader 实现就可以了。
-
-比如告诉 AI："帮我新增一个 Word 文档的 Loader，参考现有的 PDF Loader 实现"，AI 完全可以搞定。
-
-### 5. 如何集成到 AI 工具中（Copilot / Cursor / Claude Code 等）？
-
-本项目是一个 **MCP Server**，可以集成到任何支持 MCP 协议的 AI 工具和 Agent 中。我的演示中已经集成到了 **GitHub Copilot** 和 **Cursor** 中，你同样可以集成到 **Claude Code** 或其他支持 MCP 框架的工具。
-
-**如何集成？非常简单——问 AI。**
-
-本质上就是给不同的工具写一个 MCP 的配置文件：
-- **Copilot（VS Code）**：让 AI 帮你生成 MCP 配置文件即可
-- **Cursor**：直接导入项目，Cursor 会自动识别
-- **Claude Code / 其他框架**：问 AI 怎么配置，每个工具的配置方式略有不同，但原理都一样
-
-当然，也推荐你去理解 MCP 协议的原理——了解 Server 和 Client 之间是如何通信的、Tool 是怎么注册和调用的。这些在面试中也是加分项。
-
-### 6. 通用建议：善用 AI
-
-上述大多数问题（Provider 切换、模块扩展、Bug 修复、架构理解）**AI 都能解决**：
-
-- 🔧 **代码层面**：让 AI 帮你切换 Provider、实现评估方法、修复 Bug
-- 📖 **知识层面**：项目架构问题、设计模式问题，都可以问 AI 获取解释
-- 🚀 **扩展层面**：想加新功能或适配新场景，描述清楚需求让 AI 帮你实现
-
-> 多问 AI，让它指导你。这也是这个项目想要传达的核心理念之一——**学会与 AI 协作开发**。
-
----
-
-## 📌 后续安排
-
-### ✅ 会做的
-- 项目相关问题的汇总与 FAQ 整理
-- 面试高频问题整理与参考答案
-- 技术要点讲解（RAG 核心知识、架构设计等）
-- 简历包装建议与示范
-- **亲身面试实践**：我会带着这个项目去面试，把遇到的问题、怎么回答，都总结到文档中
-- **欢迎投稿共建**：如果你用这个项目去面试了，可以把面试录音发给我，我来帮你分析项目相关的问题并写入文档，同时也可以听一下面试整体有哪些改进建议。这样大家能共同进步，一起总结和完善这个项目的面试问答
-
-### ❌ 不会做的
-- 不会继续扩展新功能
-- 不会处理 Bug Fix、设计优化等
-  - 遇到 Bug 和设计上的改进点，请在自己的项目中修复和优化
-  - 后续的扩展和修复一定是要靠自己的，而且**有了 AI，这些都很容易做到**
-  - 这本身就是一个很好的学习和面试加分项
-  - 在理解项目的基础上独立扩展，才是真正的能力体现
-
-### 📝 个人规划说明
-
-我后续会去学习**大模型算法、训练**方向，会把一些笔记和思路总结在笔记中。因此对于这个项目，**不会无限扩展功能或修复 Bug**，但会非常乐意持续做的事情是：
-
-- 总结这个项目在面试中遇到的问题
-- 整理如何回答、如何迭代优化的思路
-- 把面试问答沉淀到文档中，供大家参考
-
----
-
-## 📚 配套资源
-
-本项目配有完整的配套学习资源，包括：
-
-- 🎬 **视频讲解**：项目架构设计、Skill 使用、DEV_SPEC 编写、开发全流程演示
-- 📝 **面试笔记**：大模型方向面试准备、RAG 核心知识点整理
-- ❓ **面试问题参考**：该项目在面试中遇到的真实问题与参考回答
-- 📖 **八股整理**：大模型 / RAG / NLP 相关高频面试题
-
-> 👉 **请关注小红书：[不转到大模型不改名](https://www.xiaohongshu.com) 获取以上所有资源。**
+更详细的中文学习与工程过程记录维护在独立的 `00-planning` 文档仓库，代码仓库只保留运行必需说明。`DEV_SPEC.md` 保留上游原始任务表，未打勾不等于本地未实现。

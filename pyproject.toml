@@ -37,6 +37,13 @@ mcp = [
     "mcp>=1.26,<2",
     "jsonschema>=4.20,<5",
 ]
+dashboard = [
+    "streamlit>=1.50,<2",
+]
+evaluation = [
+    "ragas==0.4.3",
+    "langchain-community==0.4.1",
+]
 rerankers = [
     "sentence-transformers>=3,<6",
 ]

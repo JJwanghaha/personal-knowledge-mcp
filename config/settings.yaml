@@ -1,18 +1,19 @@
-# 只保存非敏感配置；默认使用个人 Gemini，不配置公司网关或自动回退。
+# 只保存非敏感配置；用户选择金山云 Gateway 双模型，不自动切换供应商。
 llm:
-  provider: "gemini"  # openai / azure / deepseek / ollama / gemini
-  model: "gemini-3.7-flash"  # 用户选择；账号可用性以真实验收为准。
+  provider: "openai"  # OpenAI-compatible 协议实现，不代表请求 OpenAI 服务。
+  model: "deepseek-v4.1-flash"
   temperature: 0.0
   max_tokens: 4096
   timeout: 60.0
-  # base_url: 可选服务地址；Azure 使用资源 endpoint。
+  base_url: "https://kspmas.ksyun.com/v1"
   # deployment_name、api_version: Azure 可选连接参数；版本也可通过环境变量提供。
 
 embedding:
-  provider: "gemini"  # openai / azure / ollama / gemini
-  model: "gemini-embedding-2"
-  dimensions: 768
+  provider: "openai"  # 复用 OpenAI-compatible Embedding adapter。
+  model: "qwen3-embedding-8b"
+  dimensions: 4096  # 网关实际返回维度；不复用旧 Gemini 768 维索引。
   timeout: 60.0
+  base_url: "https://kspmas.ksyun.com/v1"
   # base_url、deployment_name、api_version 的规则与 llm 相同。
 
 vector_store:

@@ -125,6 +125,24 @@ class BM25Indexer:
             raise ValueError("collection must be a single path component")
         return self.index_dir / f"{collection}_bm25.json"
 
+    def remove_document(self, doc_id: str, collection: str = "default", *, chunk_ids: list[str] | None = None) -> bool:
+        """按准确的最终 Chunk ID 删除；未提供 ID 时兼容上游的前缀入口。"""
+        if not doc_id:
+            raise ValueError("Document identifier cannot be empty")
+        if not self.load(collection):
+            return False
+        identifiers = set(chunk_ids) if chunk_ids is not None else {cid for cid in self._documents if cid.startswith(doc_id)}
+        remaining = [stat for cid, stat in self._documents.items() if cid not in identifiers]
+        if len(remaining) == len(self._documents):
+            return False
+        if remaining:
+            self.build(remaining, collection)
+        else:
+            self._metadata = {"num_docs": 0, "avg_doc_length": 0, "total_terms": 0, "collection": collection}
+            self._index, self._documents = {}, {}
+            self._save(collection, {"metadata": self._metadata, "index": {}, "documents": {}})
+        return True
+
     def _save(self, collection: str, data: dict[str, Any]) -> None:
         """单写入者下原子替换；不宣称多进程增量写入安全。"""
         path = self._get_index_path(collection)

@@ -127,3 +127,19 @@ class ChromaStore(BaseVectorStore):
         records = {identifier: {"id": identifier, "text": document or "", "metadata": metadata or {}}
                    for identifier, document, metadata in zip(result["ids"], result["documents"], result["metadatas"])}
         return [records.get(identifier, {}) for identifier in requested]
+
+    def get_by_metadata(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        """管理读取：返回已有块，不计算向量、不创建集合。"""
+        where = {"$and": [{k: v} for k, v in filters.items()]} if filters and len(filters) > 1 else filters or None
+        data = self.collection.get(where=where, include=["documents", "metadatas"])
+        return [{"id": cid, "text": text or "", "metadata": metadata or {}}
+                for cid, text, metadata in zip(data["ids"], data["documents"], data["metadatas"])]
+
+    def delete_by_metadata(self, filters: dict[str, Any]) -> int:
+        """明确条件删除已有块；拒绝空条件，调用方负责跨索引协调。"""
+        if not filters:
+            raise ValueError("Deletion requires explicit metadata filters")
+        records = self.get_by_metadata(filters)
+        if records:
+            self.collection.delete(ids=[record["id"] for record in records])
+        return len(records)

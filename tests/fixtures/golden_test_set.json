@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "reviewed": true,
+  "description": "人工核对的公开小样例；仅验证评估流程，不能代表真实 Gemini 语义效果。",
+  "thresholds": {"hit_rate": 1.0, "mrr": 1.0},
+  "test_cases": [
+    {"case_id": "ingestion-force", "query": "文件 SHA256 相同且已经成功处理，怎样强制重新摄取？", "expected_sources": ["01-摄取流程.md"], "reference_answer": "默认跳过；用 --force 可以强制重新摄取。"},
+    {"case_id": "retrieval-rrf", "query": "RRF 如何融合 Dense 与 BM25 的候选，是否直接相加原始分数？", "expected_sources": ["02-混合检索.md"], "reference_answer": "RRF 按名次融合，不直接相加两路原始分数。"},
+    {"case_id": "mcp-stdio", "query": "MCP stdio 通信为什么将日志写到 stderr 而不是 stdout？", "expected_sources": ["03-MCP通信.md"], "reference_answer": "stdout 专用于协议，日志写 stderr 避免污染协议通信。"}
+  ]
+}

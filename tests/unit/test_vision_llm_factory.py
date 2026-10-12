@@ -336,6 +336,7 @@ def test_vision_interface_and_factory_import_without_sdk_key_or_network():
 import importlib.abc
 import socket
 import sys
+from dataclasses import replace
 
 class NoModelSDK(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
@@ -353,7 +354,9 @@ from src.libs.llm.llm_factory import LLMFactory
 assert LLMFactory.list_vision_providers() == ["azure", "gemini"]
 assert load_settings().vision_llm is None
 ImageInput(path="not-created.png")
-llm = LLMFactory.create_vision_llm(load_settings(), api_key="test-key")
+settings = load_settings()
+settings = replace(settings, llm=replace(settings.llm, provider="gemini", base_url=None))
+llm = LLMFactory.create_vision_llm(settings, api_key="test-key")
 image = ImageInput(data=b"fixture")
 assert llm.preprocess_image(image, max_size=(1, 1)) is image
 try:

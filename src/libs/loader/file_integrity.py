@@ -108,3 +108,35 @@ class SQLiteIntegrityChecker(FileIntegrityChecker):
 
     def close(self) -> None:
         """保留上游生命周期入口；没有持久连接需要额外关闭。"""
+
+    @staticmethod
+    def list_existing(db_path: str | Path, collection: str | None = None) -> list[dict]:
+        """只读已有历史，不为浏览页面创建数据库。"""
+        path = Path(db_path).resolve()
+        if not path.is_file():
+            return []
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as connection:
+            connection.row_factory = sqlite3.Row
+            query, values = "SELECT * FROM ingestion_history", []
+            if collection is not None:
+                query += " WHERE collection = ?"
+                values.append(collection)
+            return [dict(row) for row in connection.execute(query + " ORDER BY updated_at DESC", values)]
+
+    def list_processed(self, collection: str | None = None) -> list[dict]:
+        """供管理接口读取历史；失败记录也返回，由调用方展示真实状态。"""
+        return self.list_existing(self.db_path, collection)
+
+    def remove_record(self, file_hash: str, *, file_path: str | None = None, collection: str | None = None) -> bool:
+        """删除明确的历史记录；可同时约束来源路径和集合。"""
+        query, values = "DELETE FROM ingestion_history WHERE file_hash = ?", [file_hash]
+        if file_path is not None:
+            query += " AND file_path = ?"
+            values.append(file_path)
+        if collection is not None:
+            query += " AND collection = ?"
+            values.append(collection)
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            count = connection.execute(query, values).rowcount
+            connection.commit()
+        return count > 0
