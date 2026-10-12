@@ -1,4 +1,4 @@
-"""Modular RAG MCP Server 源码包。"""
+"""Personal Knowledge MCP 源码包。"""
 
 import os
 

@@ -264,7 +264,7 @@ Another beta paragraph makes this collection contain multiple chunks too.
                 async with stdio_client(parameters, errlog=stderr_log) as (read_stream, write_stream):
                     async with ClientSession(read_stream, write_stream) as session:
                         initialized = await session.initialize()
-                        assert initialized.serverInfo.name == "modular-rag-mcp-server"
+                        assert initialized.serverInfo.name == "personal-knowledge-mcp"
                         assert initialized.serverInfo.version == "0.1.0"
                         listing = await session.list_tools()
                         assert {tool.name for tool in listing.tools} == {

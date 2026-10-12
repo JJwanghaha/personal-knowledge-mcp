@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "modular-rag-mcp-server"
+name = "personal-knowledge-mcp"
 version = "0.1.0"
 description = "A modular RAG MCP server for personal knowledge management"
 readme = "README.md"

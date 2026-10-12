@@ -10,7 +10,7 @@ from pathlib import Path
 from src.core.settings import DEFAULT_SETTINGS_PATH, load_settings
 from src.mcp_server.protocol_handler import ProtocolHandler, create_mcp_server
 
-SERVER_NAME = "modular-rag-mcp-server"
+SERVER_NAME = "personal-knowledge-mcp"
 SERVER_VERSION = "0.1.0"
 
 

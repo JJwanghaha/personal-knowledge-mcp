@@ -28,7 +28,7 @@ class ToolDefinition:
 class ProtocolHandler:
     """沿用上游注册表 interface，不执行客户端提供的 Python 代码。"""
 
-    server_name: str = "modular-rag-mcp-server"
+    server_name: str = "personal-knowledge-mcp"
     server_version: str = "0.1.0"
     tools: dict[str, ToolDefinition] = field(default_factory=dict)
 
@@ -107,7 +107,7 @@ class ProtocolHandler:
             return error(f"工具执行失败：{type(exc).__name__}。")
 
 
-def create_mcp_server(server_name: str = "modular-rag-mcp-server", server_version: str = "0.1.0",
+def create_mcp_server(server_name: str = "personal-knowledge-mcp", server_version: str = "0.1.0",
                       protocol_handler: ProtocolHandler | None = None):
     """官方 v1 SDK 负责协议与初始化，本模块接入工具发现和分发。"""
     from mcp.server.lowlevel import Server

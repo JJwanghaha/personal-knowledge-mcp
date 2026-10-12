@@ -137,7 +137,7 @@ def test_registered_tools_work_through_official_stdio_client(tmp_path: Path) -> 
                     async with ClientSession(read_stream, write_stream) as session:
                         initialized = await session.initialize()
                         assert initialized.protocolVersion == types.LATEST_PROTOCOL_VERSION
-                        assert initialized.serverInfo.name == "modular-rag-mcp-server"
+                        assert initialized.serverInfo.name == "personal-knowledge-mcp"
                         assert initialized.serverInfo.version == "0.1.0"
                         assert initialized.capabilities.tools is not None
                         assert initialized.capabilities.prompts is None
@@ -269,7 +269,7 @@ def test_main_stdio_starts_with_three_default_tools_and_exits_on_disconnect(tmp_
                 async with stdio_client(parameters, errlog=stderr_log) as (read_stream, write_stream):
                     async with ClientSession(read_stream, write_stream) as session:
                         initialized = await session.initialize()
-                        assert initialized.serverInfo.name == "modular-rag-mcp-server"
+                        assert initialized.serverInfo.name == "personal-knowledge-mcp"
                         assert initialized.serverInfo.version == "0.1.0"
                         assert initialized.capabilities.tools is not None
                         listing = await session.list_tools()

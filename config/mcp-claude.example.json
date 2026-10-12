@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "personal-knowledge": {
-      "command": "/ABSOLUTE/RAG-REPO/.venv/bin/python",
-      "args": ["/ABSOLUTE/RAG-REPO/main.py", "--config", "/ABSOLUTE/RAG-REPO/config/settings.yaml", "--data-dir", "/ABSOLUTE/RAG-REPO/data"],
+      "command": "/ABSOLUTE/PERSONAL-KNOWLEDGE-MCP/.venv/bin/python",
+      "args": ["/ABSOLUTE/PERSONAL-KNOWLEDGE-MCP/main.py", "--config", "/ABSOLUTE/PERSONAL-KNOWLEDGE-MCP/config/settings.yaml", "--data-dir", "/ABSOLUTE/PERSONAL-KNOWLEDGE-MCP/data"],
       "env": {"OPENAI_API_KEY": "SET_LOCALLY_DO_NOT_COMMIT"}
     }
   }
